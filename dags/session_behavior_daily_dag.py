@@ -34,4 +34,4 @@ with DAG(
         verbose=True
     )
 
-    run_session_behavior >> "2차 분석 배치 "
+    run_session_behavior 

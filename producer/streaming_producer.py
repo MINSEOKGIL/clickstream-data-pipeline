@@ -40,15 +40,21 @@ logger = setup_logger()
 def create_safe_producer():
     try:
         producer = KafkaProducer(
-            bootstrap_servers=os.getenv("BOOTSTRAP_SERVERS", "localhost:29092,localhost:29093"),
+            bootstrap_servers=os.getenv("BOOTSTRAP_SERVERS", "localhost:30092,localhost:30093,localhost:30094"),
             key_serializer=lambda k: str(k).encode('utf-8') if k else None,
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            retries=5,
+            retries=1,
+            linger_ms=10000,
+               # 2MB
+
+            
+            
+          
             acks='all',
             #전송 중복(재시도 중복)은 방지하지만 데이터 내용 중복은 방지하지 않음.
             enable_idempotence=True,
         
-            max_in_flight_requests_per_connection=1,  # idempotence 보장 
+            # max_in_flight_requests_per_connection=1,  # idempotence 보장 
         )
         logger.info("✅ Kafka Producer initialized successfully.")
         return producer
@@ -86,7 +92,8 @@ def stream_csv_file_safe(file_path, topic, producer):
     file_name = os.path.basename(file_path)
     failed_file = f"failed/{file_name}.failed.jsonl"
     os.makedirs("failed", exist_ok=True)
-
+    last_metric_time = time.time()
+    last_metric_count = 0
     sent_count = 0
     failed_count = 0
     start_time = time.time()
@@ -127,12 +134,31 @@ def stream_csv_file_safe(file_path, topic, producer):
                     producer.send(topic, key=product_key, value=message).add_errback(on_error, row=row)
                     sent_count += 1
 
-                    time.sleep(0.001)  # 초당 약 1000건 속도로 제한
+                    # time.sleep(1/100000)  # 초당 정확히 10만건 목표
+
+                    current_time = time.time()
+                    if current_time - last_metric_time >= 5:
+                        elapsed = current_time - last_metric_time
+                        messages_in_period = sent_count - last_metric_count
+                        msg_rate = messages_in_period / elapsed
+                        
+                        total_elapsed = current_time - start_time
+                        avg_rate = sent_count / total_elapsed if total_elapsed > 0 else 0
+                        
+                        print(f"\n📊 [성능 메트릭]")
+                        print(f"   ⚡ 현재 구간 속도: {msg_rate:,.1f} msg/s")
+                        print(f"   📈 전체 평균 속도: {avg_rate:,.1f} msg/s")
+                        print(f"   📤 총 전송: {sent_count:,}건")
+                        print(f"   ❌ 실패: {failed_count}건")
+                        print(f"   ⏱️  경과시간: {total_elapsed:.1f}초\n")
+                        
+                        last_metric_time = current_time
+                        last_metric_count = sent_count
 
                     if sent_count % 10000 == 0:
                         print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] {sent_count:,}건 전송 완료")
 
-                    if sent_count % 30000 == 0:
+                    if sent_count % 50000 == 0:
                         producer.flush()
                         logger.info(f"Chunk 완료 — 누적 전송: {sent_count:,}건")
 
